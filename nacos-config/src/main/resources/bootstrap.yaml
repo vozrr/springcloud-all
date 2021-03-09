@@ -1,0 +1,24 @@
+spring:
+  cloud:
+    nacos:
+      config:
+        # nacos地址
+        server-addr: 127.0.0.1:8848
+        # 配置Data Id
+        name: nacos-config.yaml
+        # 配置文件类型
+        file-extension: yaml
+        # 指定命名空间和分组
+        namespace: nacos-config
+        group: dev
+        # 此处是一个set集合，可以ctrl+点击extension-configs查看，可以配置多个文件，
+        # 每一个Config中包含data-id,group,refresh,refresh默认为false
+        extension-configs:
+          -
+            data-id: nacos-config-mysql.yaml
+            group: dev
+            refresh: true
+          -
+            data-id: nacos-config-logging.yaml
+            group: dev
+            refresh: true
