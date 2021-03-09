@@ -10,7 +10,7 @@
 
 + 启动nacos服务器：根据第一步的官网说明启动nacos服务(默认nacos以集群方式启动，使用`cmd startup.cmd -m standalone`)以单机模式启动；
 
-+ nacos启动后在浏览器中访问http://localhost:8848/nacos/index.html会自动跳转至登录页，输入账号密码nacos/nacos即可登录至管理界面：
++ nacos启动后在浏览器中访问http://localhost:8848/nacos/index.html 会自动跳转至登录页，输入账号密码nacos/nacos即可登录至管理界面：
 
   ![image-20210309155324294](https://gitee.com/vozrr/blog-img/raw/master/image-20210309155324294.png)
 
@@ -222,7 +222,7 @@ nacos-config-logging.yaml:
 
 ```yaml
 logging:
-	info: "logging"
+  info: "logging"
 ```
 
 信息如下:
