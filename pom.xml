@@ -12,7 +12,5 @@
     <modules>
         <module>nacos-config</module>
         <module>nacos-discovery</module>
-        <module>nacos-discovery</module>
-        <module>nacos-discovery</module>
     </modules>
 </project>
