@@ -1,183 +1,223 @@
-# Springcloud学习-nacos服务注册调用
+# Ribbon负载均衡策略
 
-项目代码已发布在github上：[springcloud-all](https://github.com/vozrr/springcloud-all)
+Ribbon负载均衡策略：（摘抄）
 
-### 服务注册与发现
+| 策略名称                                 | 策略对应的类名            | 实现                                                         |
+| :--------------------------------------- | :------------------------ | :----------------------------------------------------------- |
+| 轮询策略（默认）                         | RoundRobinRule            | 轮询策略表示每次都顺序取下一个 provider，比如一共有 5 个provider，第 1 次取第 1 个，第 2次取第 2 个，第 3 次取第 3 个，以此类推 |
+| 权重轮询策略                             | WeightedResponseTimeRule  | 1.根据每个 provider 的响应时间分配一个权重，响应时间越长，权重越小，被选中的可能性越低。2.原理：一开始为轮询策略，并开启一个计时器，每 30 秒收集一次每个 provider 的平均响应时间，当信息足够时，给每个 provider附上一个权重，并按权重随机选择provider，高权越重的 provider会被高概率选中。 |
+| 随机策略                                 | RandomRule                | 从 provider 列表中随机选择一个provider                       |
+| 最少并发数策略                           | BestAvailableRule         | 选择正在请求中的并发数最小的 provider，除非这个provider 在熔断中。 |
+| 在“选定的负载均衡策略”基础上进行重试机制 | RetryRule                 | 1.“选定的负载均衡策略”这个策略是轮询策略RoundRobinRule2.该重试策略先设定一个阈值时间段，如果在这个阈值时间段内当选择 provider 不成功，则一直尝试采用“选定的负载均衡策略：轮询策略”最后选择一个可用的provider |
+| 可用性敏感策略                           | AvailabilityFilteringRule | 过滤性能差的 provider,有 2种：第一种：过滤掉在 eureka 中处于一直连接失败 provider 第二种：过滤掉高并发的 provider |
+| 区域敏感性策略                           | ZoneAvoidanceRule         | 1.以一个区域为单位考察可用性，对于不可用的区域整个丢弃，从剩下区域中选可用的provider2.如果这个 ip 区域内有一个或多个实例不可达或响应变慢，都会降低该 ip 区域内其他 ip 被选中的权重。 |
 
-​	首先，什么是服务注册发现，在分布式系统中，不同服务之间常常需要互相调用，而一个服务又可能有多份实例运行，那如何管理这些实例呢？这时我们就需要一个服务管理中心，将每一个实例都注册到服务管理中心，这样当一个服务需要调用其他服务时，通过从服务管理中心获取到被调用服务的信息，向其发起调用。
+![image-20210315111548298](https://gitee.com/vozrr/blog-img/raw/master/image-20210315111548298.png)
 
-​	例如一个论坛系统中，一个文章系统查询文章时需要获取评论信息，这时需要调用评论系统的相关接口，当我们将服务都注册到服务中心后，文章系统就可以从服务中心获取到评论系统的实例信息，继而发起查询请求；对于多个评论系统实例，我们也可以进行负载均衡，即根据一定规则向评论系统实例发起请求（例如轮询，第一次请求发给一号实例，第二次发给二号实例，依此类推），以保证请求较为合理的分摊给多个评论系统实例，避免其中有些实例无法处理过多请求而宕机；
+### IRule接口
 
-​	所以，服务注册发现是构成分布式系统的基础，本文将介绍使用nacos作为服务管理中心。
+IRule接口是定义负载均衡规则的接口，可以通过实现该接口，重写其中的自定义负载均衡策略
 
-![image-20210311172101969](https://gitee.com/vozrr/blog-img/raw/master/image-20210311172101969.png)
-
-### 使用nacos作为服务注册中心
-
-#### 导入nacos作为注册中心的依赖
-
-```xml
-	<!-- spring-cloud-alibaba、spring-boot依赖版本统一管理 -->
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>com.alibaba.cloud</groupId>
-                <artifactId>spring-cloud-alibaba-dependencies</artifactId>
-                <version>2.2.3.RELEASE</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>2.2.5.RELEASE</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
-
-    <dependencies>
-        <dependency>
-            <groupId>com.alibaba.cloud</groupId>
-            <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
-        </dependency>
-    </dependencies>
+```java
+public interface IRule{
+    
+    public Server choose(Object key);
+    
+    public void setLoadBalancer(ILoadBalancer lb);
+    
+    public ILoadBalancer getLoadBalancer();    
+}
 ```
 
-#### 创建服务提供方
 
-+ 导入依赖后，需要在application.properties中配置相关信息：
 
-```properties
-# 服务名称，也作为服务列表中的服务名
-spring.application.name=service-provider
-# 注册中心地址
-spring.cloud.nacos.discovery.server-addr=127.0.0.1:8848
-# 该服务所占端口
-server.port=8000
+### RoundRobinRule 轮询策略
+
+以最简单的轮询策略为例，其中的choose()方法通过incrementAndGetModulo()方法获取下一个请求，该方法中对nextServerCyclicCounter进行加一然后对服务数量取模获取下一个服务索引；
+
+```java
+//维护要获取的服务索引
+private AtomicInteger nextServerCyclicCounter;
+
+public Server choose(ILoadBalancer lb, Object key) {
+    if (lb == null) {
+        log.warn("no load balancer");
+        return null;
+    }
+
+    Server server = null;
+    int count = 0;
+    //循环获取10次，若仍未获取成功，返回null
+    while (server == null && count++ < 10) {
+        //获取可用实例
+        List<Server> reachableServers = lb.getReachableServers();
+        //获取全部实例
+        List<Server> allServers = lb.getAllServers();
+        int upCount = reachableServers.size();
+        int serverCount = allServers.size();
+
+        if ((upCount == 0) || (serverCount == 0)) {
+            log.warn("No up servers available from load balancer: " + lb);
+            return null;
+        }
+        //得到下一个服务实例索引，从服务列表中获取出来
+        int nextServerIndex = incrementAndGetModulo(serverCount);
+        server = allServers.get(nextServerIndex);
+
+        if (server == null) {
+            Thread.yield();
+            continue;
+        }
+
+        if (server.isAlive() && (server.isReadyToServe())) {
+            return (server);
+        }
+
+        // Next.
+        server = null;
+    }
+
+    if (count >= 10) {
+        log.warn("No available alive servers after 10 tries from load balancer: "
+                 + lb);
+    }
+    return server;
+}
+
+private int incrementAndGetModulo(int modulo) {
+    for (;;) {
+        int current = nextServerCyclicCounter.get();
+        //按顺序获取下一个实例位置
+        int next = (current + 1) % modulo;
+        if (nextServerCyclicCounter.compareAndSet(current, next))
+            return next;
+    }
+}
 ```
 
-+ 在spring boot启动类上标上 @EnableDiscoveryClient 注解
+### 自定义负载均衡策略
+
+通过实现IRule接口的choose()方法实现自定义的负载均衡方法，由于AbstractLoadBalancerRule实现了IRule接口，可以通过继承AbstractLoadBalancerRule实现自定义负载均衡；
+
+```java
+package ribbonconsumer.config;
+
+import com.netflix.client.config.IClientConfig;
+import com.netflix.loadbalancer.AbstractLoadBalancerRule;
+import com.netflix.loadbalancer.ILoadBalancer;
+import com.netflix.loadbalancer.Server;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * @author vozrr
+ */
+public class MyRule extends AbstractLoadBalancerRule {
+
+    private final Logger log = LoggerFactory.getLogger(MyRule.class);
+
+    private final AtomicInteger nextServerCounter;
+
+    /**
+     * 每个节点连续调用次数 frequency
+     */
+    private static final int FREQUENCY = 2;
+
+    public MyRule() {
+        nextServerCounter = new AtomicInteger(0);
+    }
+
+    @Override
+    public void initWithNiwsConfig(IClientConfig iClientConfig) {
+
+    }
+
+    @Override
+    public Server choose(Object key) {
+        ILoadBalancer loadBalancer = getLoadBalancer();
+        return choose(loadBalancer, key);
+    }
+
+    private Server choose(ILoadBalancer loadBalancer, Object key) {
+        if (loadBalancer == null) {
+            return null;
+        }
+        Server server = null;
+        int count = 0;
+        int num = 10;
+        while (count++ < num){
+            List<Server> allServers = loadBalancer.getAllServers();
+            List<Server> reachableServers = loadBalancer.getReachableServers();
+            int allCount = allServers.size();
+            int upCount = reachableServers.size();
+            if(allCount == 0 || upCount == 0){
+                log.warn("无可用服务");
+                return null;
+            }
+            int nextIndex = getNextServerIndex(allCount);
+            server = allServers.get(nextIndex);
+            if(server == null){
+                Thread.yield();
+                continue;
+            }
+            if(server.isAlive() && server.isReadyToServe()){
+                return server;
+            }
+            if(count >= 10){
+                log.warn("未找到可用服务");
+            }
+        }
+        return server;
+    }
+
+    /**
+     * 获取下一个服务实例在服务列表中的索引
+     * 每个服务实例连续调用 FREQUENCY 次；
+     * 如 FREQUENCY = 2，则对于实例列表[1,2],则调用顺序为{1,1,2,2,1,1....}
+     * @param allCount 服务总数
+     * @return 下一索引位置
+     */
+    private int getNextServerIndex(int allCount) {
+        int current, next;
+        int size = FREQUENCY * allCount;
+        do {
+            current = nextServerCounter.get();
+            next = (current + 1) % size;
+        }while (!nextServerCounter.compareAndSet(current, next));
+        return next / FREQUENCY;
+    }
+}
+```
+
+### 使用自定义负载均衡策略
+
+在启动类上标注@RibbonClient注解即可指定相应的负载均衡策略
 
 ```java
 @SpringBootApplication
 @EnableDiscoveryClient
-public class NacosDisCoveryProviderApplication {
+//指定对service-provider服务使用自定义负载均衡策略
+@RibbonClient(name = "service-provider", configuration = MyRule.class)
+public class RibbonConsumerApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(NacosDisCoveryProviderApplication.class, args);
+		SpringApplication.run(RibbonConsumerApplication.class, args);
 	}
 
 }
 ```
 
-+ 编写测试接口
+### idea启动多份同一服务
 
-​	现在已经做好相关配置了，项目启动后将自动注册到注册中心，为方便测试，我们编写一个controller，后续通过服务调用方调用这个接口；
++ 可在idea的services中右键需要启动多份的应用，选择复制配置：
 
-```java
-@RestController
-public class IndexController {
+![image-20210316110432977](https://gitee.com/vozrr/blog-img/raw/master/image-20210316110432977.png)
 
-    @GetMapping("/{info}")
-    public String index(@PathVariable("info") String info){
-        return "provider方法, 调用方信息：" + info;
-    }
-}
-```
++ 修改配置名称和端口号，以防止项目在启动中端口冲突：
 
-#### 创建服务调用方
+![image-20210316110720497](https://gitee.com/vozrr/blog-img/raw/master/image-20210316110720497.png)
 
-与服务提供方基本一致；
-
-+ 配置注册中心地址；
-
-  ```properties
-  # 服务名称，也作为服务列表中的服务名
-  spring.application.name=service-consumer
-  # 注册中心地址
-  spring.cloud.nacos.discovery.server-addr=127.0.0.1:8848
-  # 该服务所占端口
-  server.port=9000
-  ```
-
-+ 在启动类上方标注 @EnableDiscoveryClient 注解；
-+ 编写测试controller类用于测试：
-
-```java
-@RestController
-public class IndexController {
-
-    /**
-     * 这里向ioc中注入RestTemplate,后续使用RestTemplate发起服务调用；
-     * LoadBalanced注解标识将解析estTemplate中的服务名，对目标服务发起调用
-     * @return RestTemplate
-     */
-    @LoadBalanced
-    @Bean
-    public RestTemplate restTemplate() {
-        return new RestTemplate();
-    }
-
-    @Autowired
-    private RestTemplate restTemplate;
-
-    @GetMapping("/")
-    public String index(){
-        //使用restTemplate对service-provider服务发起请求
-        return restTemplate.getForObject("http://service-provider/" + "服务调用者", 
-                String.class);
-    }
-}
-```
-
-这里也可以使用 LoadBalancerClient 获取服务信息，更易于理解：
-
-```java
-@RestController
-public class IndexController {
-    @Bean
-    public RestTemplate restTemplate() {
-        return new RestTemplate();
-    }
-
-    @Autowired
-    private RestTemplate restTemplate;
-    
-    @Autowired
-    private LoadBalancerClient balancerClient;
-
-    @GetMapping("/")
-    public String index(){
-        //获取服务提供者实例
-        ServiceInstance instance = balancerClient.choose("service-provider");
-        //服务Host信息
-        String host = instance.getHost();
-        //服务端口信息
-        int port = instance.getPort();
-        //使用restTemplate对service-provider服务发起请求
-        String url = String.format("http://%s:%s/服务调用者", host, port);
-        return restTemplate.getForObject(url, String.class);
-    }
-}
-
-```
-
-#### 启动nacos服务
-
-+ 启动nacos服务，作为服务注册中心
-
-#### 启动两个服务
-
-+ 启动服务提供方和服务调用方
-
-#### 测试
-
-​	访问服务调用方 http://localhost:9000 ，可以看到输出了服务提供者信息；
-
-![image-20210311175701065](https://gitee.com/vozrr/blog-img/raw/master/image-20210311175701065.png)
-
-------
-
-以上便是nacos作为服务注册中心的简单使用。
++ 点击ok，即可在services中启动了。
