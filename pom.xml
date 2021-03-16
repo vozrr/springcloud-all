@@ -12,5 +12,6 @@
     <modules>
         <module>nacos-config</module>
         <module>nacos-discovery</module>
+        <module>ribbon</module>
     </modules>
 </project>
