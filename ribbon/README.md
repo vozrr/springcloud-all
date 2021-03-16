@@ -100,7 +100,7 @@ private int incrementAndGetModulo(int modulo) {
 通过实现IRule接口的choose()方法实现自定义的负载均衡方法，由于AbstractLoadBalancerRule实现了IRule接口，可以通过继承AbstractLoadBalancerRule实现自定义负载均衡；
 
 ```java
-package ribbonconsumer.config;
+package consumer.config;
 
 import com.netflix.client.config.IClientConfig;
 import com.netflix.loadbalancer.AbstractLoadBalancerRule;
